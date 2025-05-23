@@ -12,7 +12,7 @@
 
 import logging
 
-from cinderclient import api_versions
+from openstack import utils as sdk_utils
 from osc_lib.cli import format_columns
 from osc_lib.cli import parseractions
 from osc_lib.command import command
@@ -91,17 +91,20 @@ class CreateVolumeGroupType(command.ShowOne):
         return parser
 
     def take_action(self, parsed_args):
-        volume_client = self.app.client_manager.volume
+        volume_client = self.app.client_manager.sdk_connection.block_storage
 
-        if volume_client.api_version < api_versions.APIVersion('3.11'):
-            msg = _(
-                "--os-volume-api-version 3.11 or greater is required to "
-                "support the 'volume group type create' command"
+        if not sdk_utils.supports_microversion(volume_client, "3.11"):
+            raise exceptions.CommandError(
+                _(
+                    "--os-volume-api-version 3.11 or greater is required to "
+                    "support the 'volume group type create' command"
+                )
             )
-            raise exceptions.CommandError(msg)
 
-        group_type = volume_client.group_types.create(
-            parsed_args.name, parsed_args.description, parsed_args.is_public
+        group_type = volume_client.create_group_type(
+            name=parsed_args.name,
+            description=parsed_args.description,
+            is_public=parsed_args.is_public,
         )
 
         return _format_group_type(group_type)
@@ -123,21 +126,13 @@ class DeleteVolumeGroupType(command.Command):
         return parser
 
     def take_action(self, parsed_args):
-        volume_client = self.app.client_manager.volume
+        sdk = self.app.client_manager.sdk_connection
 
-        if volume_client.api_version < api_versions.APIVersion('3.11'):
-            msg = _(
-                "--os-volume-api-version 3.11 or greater is required to "
-                "support the 'volume group type delete' command"
-            )
-            raise exceptions.CommandError(msg)
-
-        group_type = utils.find_resource(
-            volume_client.group_types,
+        group_type = sdk.block_storage.find_group_type(
             parsed_args.group_type,
+            ignore_missing=False,
         )
-
-        volume_client.group_types.delete(group_type.id)
+        sdk.block_storage.delete_group_type(group_type)
 
 
 class SetVolumeGroupType(command.ShowOne):
@@ -200,18 +195,19 @@ class SetVolumeGroupType(command.ShowOne):
         return parser
 
     def take_action(self, parsed_args):
-        volume_client = self.app.client_manager.volume
+        volume_client = self.app.client_manager.sdk_connection.block_storage
 
-        if volume_client.api_version < api_versions.APIVersion('3.11'):
-            msg = _(
-                "--os-volume-api-version 3.11 or greater is required to "
-                "support the 'volume group type set' command"
+        if not sdk_utils.supports_microversion(volume_client, "3.11"):
+            raise exceptions.CommandError(
+                _(
+                    "--os-volume-api-version 3.11 or greater is required to "
+                    "support the 'volume group type set' command"
+                )
             )
-            raise exceptions.CommandError(msg)
 
-        group_type = utils.find_resource(
-            volume_client.group_types,
+        group_type = volume_client.find_group_type(
             parsed_args.group_type,
+            ignore_missing=False,
         )
 
         kwargs = {}
@@ -228,8 +224,8 @@ class SetVolumeGroupType(command.ShowOne):
 
         if kwargs:
             try:
-                group_type = volume_client.group_types.update(
-                    group_type.id, **kwargs
+                group_type = volume_client.block_storage.update_group_type(
+                    group_type, **kwargs
                 )
             except Exception as e:
                 LOG.error(_("Failed to update group type: %s"), e)
@@ -237,21 +233,27 @@ class SetVolumeGroupType(command.ShowOne):
 
         if parsed_args.no_property:
             try:
-                keys = group_type.get_keys().keys()
-                group_type.unset_keys(keys)
+                specs = volume_client.block_storage.get_group_type_specs(
+                    group_type
+                )
+                volume_client.block_storage.unset_group_type_specs(
+                    group_type, list(specs.keys())
+                )
             except Exception as e:
                 LOG.error(_("Failed to clear group type properties: %s"), e)
                 errors += 1
 
         if parsed_args.properties:
             try:
-                group_type.set_keys(parsed_args.properties)
+                volume_client.block_storage.set_group_type_specs(
+                    group_type, parsed_args.properties
+                )
             except Exception as e:
                 LOG.error(_("Failed to set group type properties: %s"), e)
                 errors += 1
 
         if errors > 0:
-            msg = _("Command Failed: One or more of the operations failed")
+            _("Command Failed: One or more of the operations failed")
             raise exceptions.CommandError()
 
         return _format_group_type(group_type)
@@ -283,27 +285,30 @@ class UnsetVolumeGroupType(command.ShowOne):
         return parser
 
     def take_action(self, parsed_args):
-        volume_client = self.app.client_manager.volume
+        volume_client = self.app.client_manager.sdk_connection.block_storage
 
-        if volume_client.api_version < api_versions.APIVersion('3.11'):
-            msg = _(
-                "--os-volume-api-version 3.11 or greater is required to "
-                "support the 'volume group type unset' command"
+        if not sdk_utils.supports_microversion(volume_client, "3.11"):
+            raise exceptions.CommandError(
+                _(
+                    "--os-volume-api-version 3.11 or greater is required to "
+                    "support the 'volume group type unset' command"
+                )
             )
-            raise exceptions.CommandError(msg)
 
-        group_type = utils.find_resource(
-            volume_client.group_types,
+        group_type = volume_client.block_storage.find_group_type(
             parsed_args.group_type,
+            ignore_missing=False,
         )
 
-        group_type.unset_keys(parsed_args.properties)
+        try:
+            volume_client.block_storage.unset_group_type_specs(
+                group_type, parsed_args.properties
+            )
+        except Exception as e:
+            LOG.error(_("Failed to unset properties: %s"), e)
+            raise exceptions.CommandError(_("Command Failed"))
 
-        group_type = utils.find_resource(
-            volume_client.group_types,
-            parsed_args.group_type,
-        )
-
+        group_type = volume_client.block_storage.get_group_type(group_type.id)
         return _format_group_type(group_type)
 
 
@@ -339,19 +344,21 @@ class ListVolumeGroupType(command.Lister):
         return parser
 
     def take_action(self, parsed_args):
-        volume_client = self.app.client_manager.volume
+        volume_client = self.app.client_manager.sdk_connection.block_storage
 
-        if volume_client.api_version < api_versions.APIVersion('3.11'):
-            msg = _(
-                "--os-volume-api-version 3.11 or greater is required to "
-                "support the 'volume group type list' command"
+        if not sdk_utils.supports_microversion(volume_client, "3.11"):
+            raise exceptions.CommandError(
+                _(
+                    "--os-volume-api-version 3.11 or greater is required to "
+                    "support the 'volume group type list' command"
+                )
             )
-            raise exceptions.CommandError(msg)
 
         if parsed_args.show_default:
-            group_types = [volume_client.group_types.default()]
+            group_types = volume_client.block_storage.get_default_group_type()
+            group_types = [group_types] if group_types else []
         else:
-            group_types = volume_client.group_types.list()
+            group_types = list(volume_client.block_storage.group_types())
 
         column_headers = (
             'ID',
@@ -388,18 +395,18 @@ class ShowVolumeGroupType(command.ShowOne):
         return parser
 
     def take_action(self, parsed_args):
-        volume_client = self.app.client_manager.volume
-
-        if volume_client.api_version < api_versions.APIVersion('3.11'):
-            msg = _(
-                "--os-volume-api-version 3.11 or greater is required to "
-                "support the 'volume group type show' command"
+        volume_client = self.app.client_manager.sdk_connection.block_storage
+        if not sdk_utils.supports_microversion(volume_client, "3.11"):
+            raise exceptions.CommandError(
+                _(
+                    "--os-volume-api-version 3.11 or greater is required to "
+                    "support the 'volume group type show' command"
+                )
             )
-            raise exceptions.CommandError(msg)
 
-        group_type = utils.find_resource(
-            volume_client.group_types,
-            parsed_args.group,
+        group_type = volume_client.block_storage.find_group_type(
+            parsed_args.group_type,
+            ignore_missing=False,
         )
 
         return _format_group_type(group_type)
