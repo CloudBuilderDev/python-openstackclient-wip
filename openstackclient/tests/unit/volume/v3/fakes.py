@@ -93,6 +93,11 @@ class FakeClientMixin:
 
         # TODO(stephenfin): Rename to 'volume_client' once all commands are
         # migrated to SDK
+        
+        # (happy7656): Understood. For now, I'll keep using volume_sdk_client
+        # during the migration. Once the migration is complete, I'll update 
+        # this logic and rename all occurrences of volume_sdk_client to 
+        # volume_client.
         self.app.client_manager.sdk_connection.volume = mock.Mock(
             spec=_proxy.Proxy,
         )

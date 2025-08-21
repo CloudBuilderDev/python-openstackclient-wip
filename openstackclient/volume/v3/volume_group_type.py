@@ -31,6 +31,7 @@ def _format_group_type(group):
         'description',
         'is_public',
         'group_specs',
+        'volume_types',
     )
     column_headers = (
         'ID',
@@ -38,10 +39,15 @@ def _format_group_type(group):
         'Description',
         'Is Public',
         'Properties',
+        'Volume Types',
     )
 
     # TODO(stephenfin): Consider using a formatter for volume_types since it's
     # a list
+
+    # (happy7656): I applied a formatter for 'volume_types' since it's a list.
+    # Did I correctly understand and implement what you intended?
+
     return (
         column_headers,
         utils.get_item_properties(
@@ -49,6 +55,7 @@ def _format_group_type(group):
             columns,
             formatters={
                 'group_specs': format_columns.DictColumn,
+                'volume_types': format_columns.ListColumn,
             },
         ),
     )
@@ -126,13 +133,20 @@ class DeleteVolumeGroupType(command.Command):
         return parser
 
     def take_action(self, parsed_args):
-        sdk = self.app.client_manager.sdk_connection
+        volume_client = self.app.client_manager.sdk_connection.block_storage
 
-        group_type = sdk.block_storage.find_group_type(
+        if not sdk_utils.supports_microversion(volume_client, "3.11"):
+            raise exceptions.CommandError(
+                _(
+                    "--os-volume-api-version 3.11 or greater is required to "
+                    "support the 'volume group type delete' command"
+                )
+            )
+        group_type = volume_client.find_group_type(
             parsed_args.group_type,
             ignore_missing=False,
         )
-        sdk.block_storage.delete_group_type(group_type)
+        volume_client.delete_group_type(group_type)
 
 
 class SetVolumeGroupType(command.ShowOne):
@@ -224,7 +238,7 @@ class SetVolumeGroupType(command.ShowOne):
 
         if kwargs:
             try:
-                group_type = volume_client.block_storage.update_group_type(
+                group_type = volume_client.update_group_type(
                     group_type, **kwargs
                 )
             except Exception as e:
@@ -233,10 +247,10 @@ class SetVolumeGroupType(command.ShowOne):
 
         if parsed_args.no_property:
             try:
-                specs = volume_client.block_storage.get_group_type_specs(
+                specs = volume_client.get_group_type_specs(
                     group_type
                 )
-                volume_client.block_storage.unset_group_type_specs(
+                volume_client.unset_group_type_specs(
                     group_type, list(specs.keys())
                 )
             except Exception as e:
@@ -245,7 +259,7 @@ class SetVolumeGroupType(command.ShowOne):
 
         if parsed_args.properties:
             try:
-                volume_client.block_storage.set_group_type_specs(
+                volume_client.set_group_type_specs(
                     group_type, parsed_args.properties
                 )
             except Exception as e:
@@ -295,20 +309,20 @@ class UnsetVolumeGroupType(command.ShowOne):
                 )
             )
 
-        group_type = volume_client.block_storage.find_group_type(
+        group_type = volume_client.find_group_type(
             parsed_args.group_type,
             ignore_missing=False,
         )
 
         try:
-            volume_client.block_storage.unset_group_type_specs(
+            volume_client.unset_group_type_specs(
                 group_type, parsed_args.properties
             )
         except Exception as e:
             LOG.error(_("Failed to unset properties: %s"), e)
             raise exceptions.CommandError(_("Command Failed"))
 
-        group_type = volume_client.block_storage.get_group_type(group_type.id)
+        group_type = volume_client.get_group_type(group_type.id)
         return _format_group_type(group_type)
 
 
@@ -329,18 +343,18 @@ class ListVolumeGroupType(command.Lister):
         )
         # TODO(stephenfin): Add once we have an equivalent command for
         # 'cinder list-filters'
-        # parser.add_argument(
-        #     '--filter',
-        #     metavar='<key=value>',
-        #     action=parseractions.KeyValueAction,
-        #     dest='filters',
-        #     help=_(
-        #         "Filter key and value pairs. Use 'foo' to "
-        #         "check enabled filters from server. Use 'key~=value' for "
-        #         "inexact filtering if the key supports "
-        #         "(supported by --os-volume-api-version 3.33 or above)"
-        #     ),
-        # )
+        parser.add_argument(
+            '--filter',
+            metavar='<key=value>',
+            action=parseractions.KeyValueAction,
+            dest='filters',
+            help=_(
+                "Filter key and value pairs. Use 'foo' to "
+                "check enabled filters from server. Use 'key~=value' for "
+                "inexact filtering if the key supports "
+                "(supported by --os-volume-api-version 3.33 or above)"
+            ),
+        )
         return parser
 
     def take_action(self, parsed_args):
@@ -353,12 +367,17 @@ class ListVolumeGroupType(command.Lister):
                     "support the 'volume group type list' command"
                 )
             )
+        filters = getattr(parsed_args, "filters", None) or {}
+        if filters and not sdk_utils.supports_microversion(volume_client, "3.33"):
+            raise exceptions.CommandError(
+                _("--filter requires --os-volume-api-version 3.33 or greater")
+            )
 
         if parsed_args.show_default:
-            group_types = volume_client.block_storage.get_default_group_type()
+            group_types = volume_client.get_default_group_type()
             group_types = [group_types] if group_types else []
         else:
-            group_types = list(volume_client.block_storage.group_types())
+            group_types = list(volume_client.group_types())
 
         column_headers = (
             'ID',
@@ -404,7 +423,7 @@ class ShowVolumeGroupType(command.ShowOne):
                 )
             )
 
-        group_type = volume_client.block_storage.find_group_type(
+        group_type = volume_client.find_group_type(
             parsed_args.group_type,
             ignore_missing=False,
         )
